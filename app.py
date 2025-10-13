@@ -121,8 +121,8 @@ def create_progress_bar(value, min_val, max_val, width=100):
 
 st.sidebar.title("NiTiHf Lattice Viewer")
 st.sidebar.info(
-    "Explore crystallographic correspondence between austenite and martensite phases in NiTiHf shape memory alloy. "
-    "Visit main app: **[XRDlicious](https://xrdlicious.com)**. 🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
+    "Crystallographic correspondence between austenite and martensite phases in NiTiHf shape memory alloy. "
+    "Visit also our main app: **[XRDlicious](https://xrdlicious.com)**. 🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
     "Contact for buggs or ideas: **lebedmi2@cvut.cz**."
 )
 
