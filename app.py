@@ -8,9 +8,9 @@ st.set_page_config(layout="wide", page_title="NiTiHf Lattice Correspondence & Di
 AUSTENITE = {
     'name': 'B2 Austenite',
     'space_group': 'Pm-3m (221)',
-    'a': 3.089,
-    'b': 3.089,
-    'c': 3.089,
+    'a': 3.096,
+    'b': 3.096,
+    'c': 3.096,
     'alpha': 90,
     'beta': 90,
     'gamma': 90,
@@ -20,11 +20,11 @@ AUSTENITE = {
 MARTENSITE = {
     'name': 'B19\' Martensite',
     'space_group': 'P2₁/m (11)',
-    'a': 2.950,
-    'b': 4.079,
-    'c': 4.755,
+    'a': 3.059,
+    'b': 4.076,
+    'c': 4.888,
     'alpha': 90,
-    'beta': 97.00,
+    'beta': 103.5,
     'gamma': 90,
     'structure': 'Monoclinic',
 }
@@ -152,7 +152,7 @@ with st.sidebar.expander("**Martensite (B19')**", expanded=False):
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 Filters & Options")
 
-st.title("🔬 Austenite-Martensite Correspondence Austenite and Martensite Phases of NiTiHf")
+st.title("🔬 Austenite-Martensite Correspondence for NiTiHf")
 st.markdown(
     "Interactive visualization of crystallographic plane relationships between austenite and martensite phases of NiTiHf shape memory alloy")
 st.markdown("---")
