@@ -2,7 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objs as go
 import numpy as np
-
+st.markdown("""
+    <style>
+    .block-container {
+        padding-top: 0rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
 st.set_page_config(layout="wide", page_title="NiTiHf Lattice Correspondence & Diffraction Viewer")
 hide_streamlit_style = """
     <style>
