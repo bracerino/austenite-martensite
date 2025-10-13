@@ -4,6 +4,14 @@ import plotly.graph_objs as go
 import numpy as np
 
 st.set_page_config(layout="wide", page_title="NiTiHf Lattice Correspondence & Diffraction Viewer")
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 AUSTENITE = {
     'name': 'B2 Austenite',
