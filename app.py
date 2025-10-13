@@ -8,9 +8,9 @@ st.set_page_config(layout="wide", page_title="NiTiHf Lattice Correspondence & Di
 AUSTENITE = {
     'name': 'B2 Austenite',
     'space_group': 'Pm-3m (221)',
-    'a': 3.096,
-    'b': 3.096,
-    'c': 3.096,
+    'a': 3.089,
+    'b': 3.089,
+    'c': 3.089,
     'alpha': 90,
     'beta': 90,
     'gamma': 90,
@@ -20,11 +20,11 @@ AUSTENITE = {
 MARTENSITE = {
     'name': 'B19\' Martensite',
     'space_group': 'P2₁/m (11)',
-    'a': 2.974,
+    'a': 2.950,
     'b': 4.079,
     'c': 4.755,
     'alpha': 90,
-    'beta': 96.62,
+    'beta': 97.00,
     'gamma': 90,
     'structure': 'Monoclinic',
 }
@@ -122,8 +122,8 @@ def create_progress_bar(value, min_val, max_val, width=100):
 st.sidebar.title("NiTiHf Lattice Viewer")
 st.sidebar.info(
     "Crystallographic correspondence between austenite and martensite phases in NiTiHf shape memory alloy. "
-    "Visit also our main app: **[XRDlicious](https://xrdlicious.com)**. 🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
-    "Contact for buggs or ideas: **lebedmi2@cvut.cz**."
+    "Visit also our main app: **[XRDlicious](https://xrdlicious.com)**. 🌀 Developed by **[Miroslav Lebeda](https://bracerino.github.io/portfolio/)**. "
+    "Contact for buggs or suggestions: **lebedmi2@cvut.cz**"
 )
 
 st.sidebar.markdown("---")
@@ -152,25 +152,35 @@ with st.sidebar.expander("**Martensite (B19')**", expanded=False):
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 Filters & Options")
 
-st.title("🔬 Austenite-Martensite NiTiHf Correspondence")
+st.title("🔬 Austenite-Martensite Correspondence Austenite and Martensite Phases of NiTiHf")
 st.markdown(
-    "Interactive visualization of crystallographic plane relationships between austenite and martensite NiTiHf shape memory alloy phases")
+    "Interactive visualization of crystallographic plane relationships between austenite and martensite phases of NiTiHf shape memory alloy")
 st.markdown("---")
 
 df = load_data()
 
 if df is not None:
-    col_search, col_angle, col_wave = st.columns([2, 1, 1])
+    col_search, col_angle_min, col_angle_max, col_wave = st.columns([2, 1, 1, 1])
 
     with col_search:
         search_mode = st.radio(
             "**Search Direction:**",
-            options=["Martensite → Austenite", "Austenite → Martensite"],
+            options=["Austenite → Martensite", "Martensite → Austenite"],
             horizontal=True,
             help="Choose whether to search by martensite or austenite reflection"
         )
 
-    with col_angle:
+    with col_angle_min:
+        min_angle = st.number_input(
+            "**Min Angle (°):**",
+            min_value=0.0,
+            max_value=90.0,
+            value=0.0,
+            step=1.0,
+            help="Filter by minimum angle between normals"
+        )
+
+    with col_angle_max:
         max_angle = st.number_input(
             "**Max Angle (°):**",
             min_value=0.0,
@@ -227,14 +237,13 @@ if df is not None:
     selected_reflection = st.selectbox(
         f"**Select {search_label} Reflection (h,k,l):**",
         ["-- Select a reflection --"] + unique_reflections,
-        index=0
+        index=6
     )
 
     if selected_reflection != "-- Select a reflection --":
-       # st.markdown("---")
 
         filtered_df = df[df[search_column] == selected_reflection].copy()
-        filtered_df = filtered_df[filtered_df['angle'] <= max_angle]
+        filtered_df = filtered_df[(filtered_df['angle'] >= min_angle) & (filtered_df['angle'] <= max_angle)]
 
         global_strain_min = df['strain'].min()
         global_strain_max = df['strain'].max()
@@ -247,7 +256,7 @@ if df is not None:
 
         if len(filtered_df) == 0:
             st.warning(
-                f"No corresponding reflections found with angle ≤ {max_angle}°. Try increasing the maximum angle.")
+                f"No corresponding reflections found with angle between {min_angle}° and {max_angle}°. Try adjusting the angle range.")
         else:
             col_opt1, col_opt2, col_opt3 = st.columns(3)
             with col_opt1:
@@ -261,7 +270,7 @@ if df is not None:
 
             st.subheader(f"Correspondence for {search_label} Reflection {selected_reflection}")
             st.markdown(
-                f"*Showing {min(len(filtered_df), max_display)} of {len(filtered_df)} reflections with angle ≤ {max_angle}°*")
+                f"*Showing {min(len(filtered_df), max_display)} of {len(filtered_df)} reflections with angle between {min_angle}° and {max_angle}°*")
 
             with st.expander("📊 Strain Range Information", expanded=False):
                 col_info1, col_info2 = st.columns(2)
@@ -293,7 +302,7 @@ if df is not None:
                 'mult_A': 'Mult. A',
                 'dM': 'd-spacing M (Å)',
                 'dA': 'd-spacing A (Å)',
-                'angle': 'Angle (°)',
+                'angle': 'Angle Between Normals (°)',
                 'strain': 'Strain (%)',
                 'strain_shear': 'Shear Strain (%)'
             }
@@ -319,12 +328,17 @@ if df is not None:
             display_df = display_df[cols_order]
 
             html_table = "<table style='width:100%; border-collapse: collapse; font-size:16px;'>"
-            html_table += "<thead><tr style='background-color:#34495e; color:white;'>"
+            html_table += "<thead><tr>"
             for col in display_df.columns:
                 if col not in ['Strain Bar', 'Shear Bar']:
-                    html_table += f"<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>{col}</th>"
+                    bg_color = '#34495e'
+                    if 'Austenite' in col or 'Mult. A' in col or 'd-spacing A' in col:
+                        bg_color = '#3498db'
+                    elif 'Martensite' in col or 'Mult. M' in col or 'd-spacing M' in col:
+                        bg_color = '#e74c3c'
+                    html_table += f"<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd; background-color:{bg_color}; color:white;'>{col}</th>"
                 else:
-                    html_table += f"<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>Visual</th>"
+                    html_table += f"<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd; background-color:#34495e; color:white;'>Visual</th>"
             html_table += "</tr></thead><tbody>"
 
             for idx, row in display_df.iterrows():
@@ -332,7 +346,7 @@ if df is not None:
                 for col in display_df.columns:
                     if col == 'Strain Bar' or col == 'Shear Bar':
                         html_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row[col]}</td>"
-                    elif col == 'Angle (°)':
+                    elif col == 'Angle Between Normals (°)':
                         val = row[col]
                         if val < 5:
                             color = '#27ae60'
@@ -356,7 +370,7 @@ if df is not None:
             st.markdown(html_table, unsafe_allow_html=True)
 
             if len(filtered_df) > max_display:
-                st.sidebar.info(f"📊 Displaying first {max_display} rows. Increase 'Max rows to display' to see more.")
+                st.info(f"📊 Displaying first {max_display} rows. Increase 'Max rows to display' to see more.")
 
             st.markdown("---")
 
@@ -374,7 +388,7 @@ if df is not None:
                 selected_peaks = []
                 for refl, d in zip(selected_reflections, selected_d_spacings):
                     two_theta = d_to_twotheta(d, wavelength)
-                    if two_theta and 10 <= two_theta <= 120:
+                    if two_theta and 1 <= two_theta <= 160:
                         selected_peaks.append({
                             '2θ': two_theta,
                             'label': refl,
@@ -385,7 +399,7 @@ if df is not None:
                 result_peaks = []
                 for refl, d in zip(result_reflections, result_d_spacings):
                     two_theta = d_to_twotheta(d, wavelength)
-                    if two_theta and 10 <= two_theta <= 120:
+                    if two_theta and 1 <= two_theta <= 160:
                         result_peaks.append({
                             '2θ': two_theta,
                             'label': refl,
@@ -460,7 +474,13 @@ if df is not None:
                         line=dict(color=search_color, width=3),
                         name=search_label,
                         hovertext=peak_hover_map[search_label],
-                        hoverinfo='text'
+                        hoverinfo='text',
+                        hoverlabel=dict(
+                            bgcolor=search_color,
+                            font_size=22,
+                            font_family="Arial",
+                            font_color="white"
+                        )
                     ))
 
                 if result_label in peak_trace_map:
@@ -471,42 +491,81 @@ if df is not None:
                         line=dict(color=result_color, width=3),
                         name=result_label,
                         hovertext=peak_hover_map[result_label],
-                        hoverinfo='text'
+                        hoverinfo='text',
+                        hoverlabel=dict(
+                            bgcolor=result_color,
+                            font_size=22,
+                            font_family="Arial",
+                            font_color="white"
+                        )
                     ))
 
                 max_annotations = 15
                 for peak in grouped_peaks[:max_annotations]:
-                    label_parts = []
-                    color = '#000000'
+                    label_parts_search = []
+                    label_parts_result = []
 
                     for p in peak['labels']:
                         if p['type'] == search_label:
-                            label_parts.append(f"{search_label[0]}: {p['label']}")
-                            color = search_color
+                            label_parts_search.append(f"{search_label[0]}: {p['label']}")
                         else:
-                            label_parts.append(f"{result_label[0]}: {p['label']}")
-                            if color == '#000000':
-                                color = result_color
+                            label_parts_result.append(f"{result_label[0]}: {p['label']}")
 
-                    label_text = '<br>'.join(label_parts[:2])
-                    if len(label_parts) > 2:
-                        label_text += f'<br>+{len(label_parts) - 2} more'
+                    if label_parts_search:
+                        label_text_search = '<br>'.join(label_parts_search[:2])
+                        if len(label_parts_search) > 2:
+                            label_text_search += f'<br>+{len(label_parts_search) - 2} more'
 
-                    fig_diff.add_annotation(
-                        x=peak['2θ'],
-                        y=max_intensity + 5,
-                        text=label_text,
-                        showarrow=True,
-                        arrowhead=2,
-                        arrowsize=1,
-                        arrowwidth=3,
-                        arrowcolor=color,
-                        ax=0,
-                        ay=-40,
-                        font=dict(size=16, color=color, family='Arial Black'),
-                        bgcolor='rgba(255,255,255,0.8)',
-                        borderpad=4
-                    )
+                        if search_label == "Austenite":
+                            ay_pos = 80
+                            y_anchor = -10
+                        else:
+                            ay_pos = -80
+                            y_anchor = max_intensity + 10
+
+                        fig_diff.add_annotation(
+                            x=peak['2θ'],
+                            y=y_anchor,
+                            text=label_text_search,
+                            showarrow=True,
+                            arrowhead=2,
+                            arrowsize=1,
+                            arrowwidth=3,
+                            arrowcolor=search_color,
+                            ax=0,
+                            ay=ay_pos,
+                            font=dict(size=16, color=search_color, family='Arial Black'),
+                            bgcolor='rgba(255,255,255,0.8)',
+                            borderpad=4
+                        )
+
+                    if label_parts_result:
+                        label_text_result = '<br>'.join(label_parts_result[:2])
+                        if len(label_parts_result) > 2:
+                            label_text_result += f'<br>+{len(label_parts_result) - 2} more'
+
+                        if result_label == "Austenite":
+                            ay_pos = 80
+                            y_anchor = -10
+                        else:
+                            ay_pos = -80
+                            y_anchor = max_intensity + 10
+
+                        fig_diff.add_annotation(
+                            x=peak['2θ'],
+                            y=y_anchor,
+                            text=label_text_result,
+                            showarrow=True,
+                            arrowhead=2,
+                            arrowsize=1,
+                            arrowwidth=3,
+                            arrowcolor=result_color,
+                            ax=0,
+                            ay=ay_pos,
+                            font=dict(size=16, color=result_color, family='Arial Black'),
+                            bgcolor='rgba(255,255,255,0.8)',
+                            borderpad=4
+                        )
 
                 fig_diff.update_layout(
                     xaxis_title="2θ (degrees)",
@@ -523,7 +582,7 @@ if df is not None:
                     ),
                     font=dict(size=26, color='#000000'),
                     xaxis=dict(
-                        range=[10, 120],
+                        range=[1, 160],
                         tickfont=dict(size=24, color='#000000'),
                         title_font=dict(size=28, color='#000000'),
                         gridcolor='#d0d0d0',
@@ -531,7 +590,7 @@ if df is not None:
                         linewidth=2
                     ),
                     yaxis=dict(
-                        range=[0, max_intensity + 20],
+                        range=[-20, max_intensity + 25],
                         tickfont=dict(size=24, color='#000000'),
                         title_font=dict(size=28, color='#000000'),
                         gridcolor='#d0d0d0',
@@ -548,6 +607,42 @@ if df is not None:
                 )
 
                 st.plotly_chart(fig_diff, use_container_width=True)
+
+                st.markdown("### 📋 Calculated Diffraction Angles")
+                st.markdown(
+                    f"*2θ calculated using Bragg's law (λ = 2d·sin(θ)) with wavelength {wavelength} Å. Valid range: 1° to 160°*")
+
+                peak_table_data = []
+                for peak in all_peaks:
+                    peak_table_data.append({
+                        'Phase': peak['type'],
+                        'Reflection (h,k,l)': peak['label'],
+                        '2θ (°)': f"{peak['2θ']:.3f}",
+                        'd-spacing (Å)': f"{peak['d']:.4f}"
+                    })
+
+                peak_df = pd.DataFrame(peak_table_data)
+
+                html_peak_table = "<table style='width:100%; border-collapse: collapse; font-size:16px;'>"
+                html_peak_table += "<thead><tr style='background-color:#34495e; color:white;'>"
+                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>Phase</th>"
+                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>Reflection (h,k,l)</th>"
+                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>2θ (°)</th>"
+                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>d-spacing (Å)</th>"
+                html_peak_table += "</tr></thead><tbody>"
+
+                for _, row in peak_df.iterrows():
+                    phase_color = search_color if row['Phase'] == search_label else result_color
+                    html_peak_table += "<tr style='border-bottom:1px solid #ddd;'>"
+                    html_peak_table += f"<td style='padding:10px; text-align:center; color:{phase_color}; font-weight:bold; border:1px solid #ddd;'>{row['Phase']}</td>"
+                    html_peak_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row['Reflection (h,k,l)']}</td>"
+                    html_peak_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row['2θ (°)']}</td>"
+                    html_peak_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row['d-spacing (Å)']}</td>"
+                    html_peak_table += "</tr>"
+
+                html_peak_table += "</tbody></table>"
+
+                st.markdown(html_peak_table, unsafe_allow_html=True)
 
                 st.markdown("---")
 
