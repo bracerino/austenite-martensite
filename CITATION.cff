@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the XRDlicious article below."
+title: "austenite-martensite: B2 austenite / B19' martensite lattice correspondence viewer"
+authors:
+  - family-names: Lebeda
+    given-names: Miroslav
+license: MIT
+repository-code: "https://github.com/bracerino/austenite-martensite"
+preferred-citation:
+  type: article
+  title: "XRDlicious: an interactive web-based platform for online calculation of diffraction patterns and radial distribution functions from crystal structures"
+  authors:
+    - family-names: Lebeda
+      given-names: Miroslav
+    - family-names: Drahokoupil
+      given-names: Jan
+    - family-names: Veřtát
+      given-names: Petr
+    - family-names: Svoboda
+      given-names: Šimon
+    - family-names: Smola
+      given-names: Vojtěch
+    - family-names: Ahmed
+      given-names: Ubaid
+    - family-names: Vlčák
+      given-names: Petr
+  journal: "Journal of Applied Crystallography"
+  year: 2025
+  volume: 58
+  issue: 5
+  start: 1810
+  end: 1816
+  doi: "10.1107/S1600576725005370"

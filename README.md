@@ -21,6 +21,16 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Citation
+
+If you use this app, please cite:
+
+M. Lebeda, J. Drahokoupil, P. Veřtát, Š. Svoboda, V. Smola, U. Ahmed & P. Vlčák (2025). XRDlicious: an interactive web-based platform for online calculation of diffraction patterns and radial distribution functions from crystal structures. *J. Appl. Cryst.* **58**, 1810–1816. [doi:10.1107/S1600576725005370](https://doi.org/10.1107/S1600576725005370)
+
+## License
+
+[MIT](LICENSE)
+
 ## Contact
 
 Bugs and suggestions: lebedmi2@cvut.cz. See also [XRDlicious](https://xrdlicious.com).
