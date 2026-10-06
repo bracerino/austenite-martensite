@@ -1,867 +1,514 @@
-import streamlit as st
-import pandas as pd
-import plotly.graph_objs as go
 import numpy as np
-st.markdown("""
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from crystallography import (
+    Lattice,
+    build_correspondence,
+    caglioti_fwhm,
+    d_to_twotheta,
+    gaussian,
+    lorentzian,
+    pearson_vii,
+    pseudo_voigt,
+)
+from seo import inject_seo_metadata
+
+inject_seo_metadata()
+
+st.set_page_config(
+    page_title="NiTiHf Lattice Correspondence",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+st.markdown(
+    """
     <style>
-    .block-container {
-        padding-top: 0rem;
+    .block-container {padding-top: 2rem;}
+    /* Tabs styled as in XRDlicious. Streamlit >= 1.5x renders tabs with React Aria
+       ([data-testid="stTab"], [data-selected]) instead of BaseWeb buttons. */
+    .stTabs [role="tablist"] {gap: 20px !important; padding: 4px 2px 10px 2px !important;}
+    .stTabs [role="tablist"]::after {display: none !important;}
+    .stTabs [data-testid="stTab"] {
+        height: auto !important; min-height: 2.9rem; padding: 8px 18px !important;
+        background-color: #f0f4ff !important; border-radius: 12px !important; border: none !important;
+        color: #1e3a8a !important; transition: all 0.3s ease !important;
     }
-    </style>
-""", unsafe_allow_html=True)
-st.set_page_config(layout="wide", page_title="NiTiHf Lattice Correspondence & Diffraction Viewer")
-hide_streamlit_style = """
-    <style>
+    .stTabs [data-testid="stTab"] p {
+        font-size: 1.15rem !important; color: #1e3a8a !important; font-weight: 600 !important; margin: 0 !important;
+    }
+    .stTabs [data-testid="stTab"][data-hovered], .stTabs [data-testid="stTab"]:hover {
+        background-color: #dbe5ff !important;
+    }
+    .stTabs [data-testid="stTab"][data-selected], .stTabs [data-testid="stTab"][aria-selected="true"] {
+        background-color: #e0e7ff !important; box-shadow: 0 2px 6px rgba(30, 58, 138, 0.3) !important;
+    }
+    .stTabs [data-testid="stTab"][data-selected] p {font-weight: 700 !important;}
+    .stTabs [data-testid="stTab"] .react-aria-SelectionIndicator {display: none !important;}
+    /* Search-direction switcher (st.segmented_control, key="direction"): stacked, prominent buttons.
+       Streamlit >= 1.5x renders it as a React Aria toggle group: buttons carry
+       data-variant="segmented_control" and [data-selected] when active. */
+    .st-key-direction [data-testid="stWidgetLabel"] p {
+        font-size: 1.15rem !important; font-weight: 700 !important; color: #1e3a8a !important;
+    }
+    .st-key-direction [data-testid="stButtonGroup"] > div:has(> [data-variant="segmented_control"]) {
+        display: flex !important; flex-direction: column !important; align-items: stretch !important;
+        gap: 8px !important; width: 100% !important; overflow: visible !important;
+    }
+    .st-key-direction [data-variant="segmented_control"] {
+        width: 100% !important; justify-content: flex-start !important; margin: 0 !important;
+        min-height: 3rem !important; padding: 10px 18px !important;
+        border: 2px solid #1e3a8a !important; border-radius: 12px !important;
+        background-color: #f0f4ff !important; color: #1e3a8a !important; transition: all 0.2s ease !important;
+    }
+    .st-key-direction [data-variant="segmented_control"]:hover {background-color: #dbe5ff !important;}
+    .st-key-direction [data-variant="segmented_control"][data-selected] {
+        background-color: #1e3a8a !important; color: #ffffff !important;
+        box-shadow: 0 3px 8px rgba(30, 58, 138, 0.35) !important;
+    }
+    .st-key-direction [data-variant="segmented_control"] p,
+    .st-key-direction [data-variant="segmented_control"] span {
+        font-size: 1.1rem !important; font-weight: 700 !important; color: inherit !important;
+    }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
-
-AUSTENITE = {
-    'name': 'B2 Austenite',
-    'space_group': 'Pm-3m (221)',
-    'a': 3.096,
-    'b': 3.096,
-    'c': 3.096,
-    'alpha': 90,
-    'beta': 90,
-    'gamma': 90,
-    'structure': 'Cubic',
-}
-
-MARTENSITE = {
-    'name': 'B19\' Martensite',
-    'space_group': 'P2₁/m (11)',
-    'a': 3.059,
-    'b': 4.076,
-    'c': 4.888,
-    'alpha': 90,
-    'beta': 103.5,
-    'gamma': 90,
-    'structure': 'Monoclinic',
-}
-
-
-def format_hkl(hkl_string):
-    try:
-        hkl_string = str(hkl_string).strip()
-        hkl_string = hkl_string.replace('(', '').replace(')', '')
-        values = [float(x.strip()) for x in hkl_string.split(',')]
-        formatted = []
-        for v in values:
-            if v == int(v):
-                formatted.append(str(int(v)))
-            else:
-                formatted.append(str(v))
-        return f"({', '.join(formatted)})"
-    except:
-        return hkl_string
-
-
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_excel('hkl_corresp_table_NiTiHf_extended.xlsx', sheet_name='Lattice correspondance')
-
-        column_mapping = {
-            'Martensite planes (h,k,l)': 'martensite',
-            ' Multiplicity of martensite planes': 'mult_M',
-            'Corresponding austenite planes (h,k,l)': 'austenite',
-            'Multiplicity of austenite planes': 'mult_A',
-            'Martensite planes spacing dMhkl [A]': 'dM',
-            'Austenite planes spacing dAhkl [A]': 'dA',
-            'Angle between normals of martensite and corresponding austenite planes [deg.]': 'angle',
-            'Normal transformation strain (dAhkl - dMhkl)/dAhkl*100 [%]': 'strain_normal',
-            'Shear transformation strain [%]': 'strain_shear',
-        }
-
-        existing_cols = {k: v for k, v in column_mapping.items() if k in df.columns}
-        df = df.rename(columns=existing_cols)
-
-        if 'Transformation strain (dAhkl - dMhkl)/dAhkl*100 [%]' in df.columns:
-            df = df.rename(columns={'Transformation strain (dAhkl - dMhkl)/dAhkl*100 [%]': 'strain'})
-        else:
-            df['strain'] = df['strain_normal']
-
-        df['martensite'] = df['martensite'].apply(format_hkl)
-        df['austenite'] = df['austenite'].apply(format_hkl)
-
-        return df
-    except FileNotFoundError:
-        st.error("⚠️ Excel file 'hkl_corresp_table_NiTiHf_extended.xlsx' not found. Please upload the file.")
-        return None
-    except Exception as e:
-        st.error(f"⚠️ Error loading data: {str(e)}")
-        return None
-
-
-def d_to_twotheta(d_spacing, wavelength=1.5406):
-    if d_spacing <= 0:
-        return None
-    sin_theta = wavelength / (2 * d_spacing)
-    if abs(sin_theta) > 1:
-        return None
-    theta = np.arcsin(sin_theta)
-    return 2 * np.degrees(theta)
-
-
-def create_progress_bar(value, min_val, max_val, width=100):
-    if pd.isna(value) or min_val is None or max_val is None:
-        return ""
-
-    if value >= 0:
-        color = "#27ae60"
-        if max_val > 0:
-            normalized = value / max_val
-        else:
-            normalized = 0
-    else:
-        color = "#e74c3c"
-        if min_val < 0:
-            normalized = abs(value / min_val)
-        else:
-            normalized = 0
-
-    normalized = max(0, min(1, normalized))
-    filled_width = int(normalized * width)
-
-    bar = f'<div style="width:{width}px; height:20px; background-color:#ecf0f1; border-radius:3px; display:inline-block; vertical-align:middle;">' \
-          f'<div style="width:{filled_width}px; height:20px; background-color:{color}; border-radius:3px; transition: width 0.3s ease;"></div></div>'
-
-    return bar
-
-
-st.sidebar.title("NiTiHf Lattice Viewer")
-st.sidebar.info(
-    "Crystallographic correspondence between austenite and martensite phases in NiTiHf shape memory alloy. "
-    "Visit also our main app: **[XRDlicious](https://xrdlicious.com)**. 🌀 Developed by **[Miroslav Lebeda](https://bracerino.github.io/portfolio/)**. "
-    "Contact for buggs or suggestions: **lebedmi2@cvut.cz**"
+    """,
+    unsafe_allow_html=True,
 )
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔬 Crystal Structures")
+A_COLOR = "#3498db"
+M_COLOR = "#e74c3c"
 
-with st.sidebar.expander("**Austenite (B2)**", expanded=False):
-    st.markdown(f"**Space Group:** {AUSTENITE['space_group']}")
-    st.markdown(f"**Structure:** {AUSTENITE['structure']}")
-    st.markdown(f"**Lattice Parameters:**")
-    st.markdown(f"- a = {AUSTENITE['a']:.3f} Å")
-    st.markdown(f"- b = {AUSTENITE['b']:.3f} Å")
-    st.markdown(f"- c = {AUSTENITE['c']:.3f} Å")
-    st.markdown(f"- α = β = γ = {AUSTENITE['alpha']}°")
+# Martensite lattice in the standard B19' setting: unique axis b, beta = angle between a and c.
+# Lattice correspondence: a_M || [100]_B2, b_M || [011]_B2, c_M || [0-11]_B2.
+PRESETS = {
+    "NiTiHf — B2 / B19'": {
+        "a0": 3.096, "a": 3.059, "b": 4.079, "c": 4.890, "beta": 103.5,
+        "source": "Parameters used for the original NiTiHf correspondence table "
+                  "(hkl_corresp_table_NiTiHf_extended.xlsx).",
+    },
+    "NiTi — B2 / B19'": {
+        "a0": 3.015, "a": 2.898, "b": 4.108, "c": 4.646, "beta": 97.78,
+        "source": "B2: Otsuka & Ren, Prog. Mater. Sci. 50 (2005) 511. "
+                  "B19': Kudoh et al., Acta Metall. 33 (1985) 2049.",
+    },
+}
+CUSTOM = "Custom"
+LATTICE_KEYS = ("a0", "a", "b", "c", "beta")
 
-with st.sidebar.expander("**Martensite (B19')**", expanded=False):
-    st.markdown(f"**Space Group:** {MARTENSITE['space_group']}")
-    st.markdown(f"**Structure:** {MARTENSITE['structure']}")
-    st.markdown(f"**Lattice Parameters:**")
-    st.markdown(f"- a = {MARTENSITE['a']:.3f} Å")
-    st.markdown(f"- b = {MARTENSITE['b']:.3f} Å")
-    st.markdown(f"- c = {MARTENSITE['c']:.3f} Å")
-    st.markdown(f"- α = {MARTENSITE['alpha']}°")
-    st.markdown(f"- β = {MARTENSITE['beta']:.2f}°")
-    st.markdown(f"- γ = {MARTENSITE['gamma']}°")
+WAVELENGTHS = {
+    "Cu Kα₁ (1.5406 Å)": 1.5406,
+    "Mo Kα₁ (0.7093 Å)": 0.7093,
+    "Cr Kα₁ (2.2897 Å)": 2.2897,
+    "Fe Kα₁ (1.9360 Å)": 1.9360,
+    "Co Kα₁ (1.7889 Å)": 1.7889,
+    "Ag Kα₁ (0.5594 Å)": 0.5594,
+    "Custom": None,
+}
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📊 Filters & Options")
+# Shared plot styling (large fonts for readability and for figures exported to papers/slides)
+PLOT_FONT = dict(size=24, family="Arial")
+AXIS_STYLE = dict(title_font=dict(size=30), tickfont=dict(size=24), showline=False, mirror=False,
+                  ticks="outside", ticklen=8, gridcolor="rgba(128,128,128,0.25)")
+LEGEND_FONT = dict(size=24)
+HOVER_STYLE = dict(font_size=22)
 
-st.title("🔬 Austenite-Martensite Correspondence for NiTiHf")
-st.markdown(
-    "Interactive visualization of crystallographic plane relationships between austenite and martensite phases of NiTiHf shape memory alloy")
-st.markdown("---")
+PROFILES = ["Sticks only", "Gaussian", "Lorentzian", "Pseudo-Voigt", "Pearson VII"]
 
-df = load_data()
+# ----------------------------------------------------------------------------------------------
+# Session state helpers
+# ----------------------------------------------------------------------------------------------
 
-if df is not None:
-    col_search, col_angle_min, col_angle_max, col_wave = st.columns([2, 1, 1, 1])
 
-    with col_search:
-        search_mode = st.radio(
-            "**Search Direction:**",
-            options=["Austenite → Martensite", "Martensite → Austenite"],
-            horizontal=True,
-            help="Choose whether to search by martensite or austenite reflection"
-        )
+def _apply_preset():
+    preset = PRESETS.get(st.session_state["preset"])
+    if preset is not None:
+        for k in LATTICE_KEYS:
+            st.session_state[f"lat_{k}"] = preset[k]
 
-    with col_angle_min:
-        min_angle = st.number_input(
-            "**Min Angle (°):**",
-            min_value=0.0,
-            max_value=90.0,
-            value=0.0,
-            step=1.0,
-            help="Filter by minimum angle between normals"
-        )
 
-    with col_angle_max:
-        max_angle = st.number_input(
-            "**Max Angle (°):**",
-            min_value=0.0,
-            max_value=90.0,
-            value=15.0,
-            step=1.0,
-            help="Filter by maximum angle between normals"
-        )
+if "preset" not in st.session_state:
+    st.session_state["preset"] = next(iter(PRESETS))
+    _apply_preset()
 
-    with col_wave:
-        wavelength_options = {
-            "Cu Kα₁ (1.5406 Å)": 1.5406,
-            "Mo Kα₁ (0.7093 Å)": 0.7093,
-            "Cr Kα₁ (2.2897 Å)": 2.2897,
-            "Fe Kα₁ (1.9360 Å)": 1.9360,
-            "Co Kα₁ (1.7889 Å)": 1.7889,
-            "Ag Kα₁ (0.5594 Å)": 0.5594
-        }
 
-        wavelength_label = st.selectbox(
-            "**X-ray Wavelength:**",
-            options=list(wavelength_options.keys()),
-            index=0,
-            help="Common X-ray sources:\n"
-                 "• Copper (Cu Kα₁): 1.5406 Å\n"
-                 "• Molybdenum (Mo Kα₁): 0.7093 Å\n"
-                 "• Chromium (Cr Kα₁): 2.2897 Å\n"
-                 "• Iron (Fe Kα₁): 1.9360 Å\n"
-                 "• Cobalt (Co Kα₁): 1.7889 Å\n"
-                 "• Silver (Ag Kα₁): 0.5594 Å"
-        )
-        wavelength = wavelength_options[wavelength_label]
+def _mark_custom():
+    preset = PRESETS.get(st.session_state["preset"])
+    if preset is not None and any(
+        not np.isclose(st.session_state[f"lat_{k}"], preset[k]) for k in LATTICE_KEYS
+    ):
+        st.session_state["preset"] = CUSTOM
 
-    if search_mode == "Martensite → Austenite":
-        search_column = 'martensite'
-        result_column = 'austenite'
-        search_label = "Martensite"
-        result_label = "Austenite"
-        search_d = 'dM'
-        result_d = 'dA'
-        search_color = '#e74c3c'
-        result_color = '#3498db'
-    else:
-        search_column = 'austenite'
-        result_column = 'martensite'
-        search_label = "Austenite"
-        result_label = "Martensite"
-        search_d = 'dA'
-        result_d = 'dM'
-        search_color = '#3498db'
-        result_color = '#e74c3c'
 
-    unique_reflections = sorted(df[search_column].unique())
-    selected_reflection = st.selectbox(
-        f"**Select {search_label} Reflection (h,k,l):**",
-        ["-- Select a reflection --"] + unique_reflections,
-        index=6
+@st.cache_data(show_spinner="Computing lattice correspondence…")
+def get_correspondence(a0, a, b, c, beta, max_index):
+    return build_correspondence(Lattice(a0, a0, a0), Lattice(a, b, c, 90.0, beta, 90.0), max_index)
+
+
+# ----------------------------------------------------------------------------------------------
+# Sidebar
+# ----------------------------------------------------------------------------------------------
+
+with st.sidebar:
+    st.title("🔬 Lattice Viewer")
+    st.caption(
+        "Crystallographic correspondence between B2 austenite and B19' martensite. "
+        "Visit also our main app **[XRDlicious](https://xrdlicious.com)**. "
+        "Bugs & suggestions: **lebedmi2@cvut.cz**"
     )
 
-    if selected_reflection != "-- Select a reflection --":
-
-        filtered_df = df[df[search_column] == selected_reflection].copy()
-        filtered_df = filtered_df[(filtered_df['angle'] >= min_angle) & (filtered_df['angle'] <= max_angle)]
-
-        global_strain_min = df['strain'].min()
-        global_strain_max = df['strain'].max()
-
-        global_shear_min = None
-        global_shear_max = None
-        if 'strain_shear' in df.columns:
-            global_shear_min = df['strain_shear'].min()
-            global_shear_max = df['strain_shear'].max()
-
-        if len(filtered_df) == 0:
-            st.warning(
-                f"No corresponding reflections found with angle between {min_angle}° and {max_angle}°. Try adjusting the angle range.")
-        else:
-            col_opt1, col_opt2, col_opt3 = st.columns(3)
-            with col_opt1:
-                show_diffraction = st.sidebar.checkbox("Show Diffraction Pattern", value=True)
-            with col_opt2:
-                combine_graphs = st.sidebar.checkbox("Combine d-spacing bars", value=False)
-            with col_opt3:
-                max_display = st.sidebar.number_input("Max rows to display", min_value=5, max_value=100, value=20, step=5)
-
-            st.markdown("---")
-
-            st.subheader(f"Correspondence for {search_label} Reflection {selected_reflection}")
-            st.markdown(
-                f"*Showing {min(len(filtered_df), max_display)} of {len(filtered_df)} reflections with angle between {min_angle}° and {max_angle}°*")
-
-            with st.expander("📊 Strain Range Information", expanded=False):
-                col_info1, col_info2 = st.columns(2)
-                with col_info1:
-                    st.metric("Global Strain Min", f"{global_strain_min:.2f}%")
-                    st.metric("Global Strain Max", f"{global_strain_max:.2f}%")
-                with col_info2:
-                    if global_shear_min is not None:
-                        st.metric("Global Shear Strain Min", f"{global_shear_min:.2f}%")
-                        st.metric("Global Shear Strain Max", f"{global_shear_max:.2f}%")
-
-            display_cols = [search_column, result_column, search_d, result_d, 'angle', 'strain']
-            if 'mult_M' in filtered_df.columns:
-                if search_column == 'martensite':
-                    display_cols.insert(1, 'mult_M')
-                    display_cols.insert(3, 'mult_A')
-                else:
-                    display_cols.insert(1, 'mult_A')
-                    display_cols.insert(3, 'mult_M')
-            if 'strain_shear' in filtered_df.columns:
-                display_cols.append('strain_shear')
-
-            display_df = filtered_df[display_cols].head(max_display).copy()
-
-            col_names = {
-                'martensite': 'Martensite (h,k,l)',
-                'austenite': 'Austenite (h,k,l)',
-                'mult_M': 'Mult. M',
-                'mult_A': 'Mult. A',
-                'dM': 'd-spacing M (Å)',
-                'dA': 'd-spacing A (Å)',
-                'angle': 'Angle Between Normals (°)',
-                'strain': 'Strain (%)',
-                'strain_shear': 'Shear Strain (%)'
-            }
-            display_df = display_df.rename(columns={k: v for k, v in col_names.items() if k in display_df.columns})
-
-            display_df['Strain Bar'] = display_df['Strain (%)'].apply(
-                lambda x: create_progress_bar(x, global_strain_min, global_strain_max, 120)
-            )
-
-            if 'Shear Strain (%)' in display_df.columns and global_shear_min is not None:
-                display_df['Shear Bar'] = display_df['Shear Strain (%)'].apply(
-                    lambda x: create_progress_bar(x, global_shear_min, global_shear_max, 120)
-                )
-
-            cols_order = [c for c in display_df.columns if c not in ['Strain Bar', 'Shear Bar']]
-            if 'Strain (%)' in cols_order:
-                idx = cols_order.index('Strain (%)')
-                cols_order.insert(idx + 1, 'Strain Bar')
-            if 'Shear Strain (%)' in cols_order and 'Shear Bar' in display_df.columns:
-                idx = cols_order.index('Shear Strain (%)')
-                cols_order.insert(idx + 1, 'Shear Bar')
-
-            display_df = display_df[cols_order]
-
-            html_table = "<table style='width:100%; border-collapse: collapse; font-size:16px;'>"
-            html_table += "<thead><tr>"
-            for col in display_df.columns:
-                if col not in ['Strain Bar', 'Shear Bar']:
-                    bg_color = '#34495e'
-                    if 'Austenite' in col or 'Mult. A' in col or 'd-spacing A' in col:
-                        bg_color = '#3498db'
-                    elif 'Martensite' in col or 'Mult. M' in col or 'd-spacing M' in col:
-                        bg_color = '#e74c3c'
-                    html_table += f"<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd; background-color:{bg_color}; color:white;'>{col}</th>"
-                else:
-                    html_table += f"<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd; background-color:#34495e; color:white;'>Visual</th>"
-            html_table += "</tr></thead><tbody>"
-
-            for idx, row in display_df.iterrows():
-                html_table += "<tr style='border-bottom:1px solid #ddd;'>"
-                for col in display_df.columns:
-                    if col == 'Strain Bar' or col == 'Shear Bar':
-                        html_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row[col]}</td>"
-                    elif col == 'Angle Between Normals (°)':
-                        val = row[col]
-                        if val < 5:
-                            color = '#27ae60'
-                        elif val < 10:
-                            color = '#f39c12'
-                        else:
-                            color = '#e74c3c'
-                        html_table += f"<td style='padding:10px; text-align:center; color:{color}; font-weight:bold; border:1px solid #ddd;'>{val:.2f}</td>"
-                    elif col == 'Strain (%)' or col == 'Shear Strain (%)':
-                        val = row[col]
-                        color = '#27ae60' if val > 0 else '#e74c3c'
-                        html_table += f"<td style='padding:10px; text-align:center; color:{color}; font-weight:bold; border:1px solid #ddd;'>{val:.2f}</td>"
-                    elif 'd-spacing' in col:
-                        html_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row[col]:.4f}</td>"
-                    else:
-                        html_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row[col]}</td>"
-                html_table += "</tr>"
-
-            html_table += "</tbody></table>"
-
-            st.markdown(html_table, unsafe_allow_html=True)
-
-            if len(filtered_df) > max_display:
-                st.info(f"📊 Displaying first {max_display} rows. Increase 'Max rows to display' to see more.")
-
-            st.markdown("---")
-
-            selected_d = filtered_df[search_d].iloc[0]
-
-            if show_diffraction:
-                st.subheader("📈 Simulated Diffraction Pattern")
-
-                selected_reflections = [selected_reflection]
-                selected_d_spacings = [selected_d]
-
-                result_reflections = filtered_df[result_column].head(max_display).tolist()
-                result_d_spacings = filtered_df[result_d].head(max_display).tolist()
-
-                selected_peaks = []
-                for refl, d in zip(selected_reflections, selected_d_spacings):
-                    two_theta = d_to_twotheta(d, wavelength)
-                    if two_theta and 1 <= two_theta <= 160:
-                        selected_peaks.append({
-                            '2θ': two_theta,
-                            'label': refl,
-                            'type': search_label,
-                            'd': d
-                        })
-
-                result_peaks = []
-                for refl, d in zip(result_reflections, result_d_spacings):
-                    two_theta = d_to_twotheta(d, wavelength)
-                    if two_theta and 1 <= two_theta <= 160:
-                        result_peaks.append({
-                            '2θ': two_theta,
-                            'label': refl,
-                            'type': result_label,
-                            'd': d
-                        })
-
-                all_peaks = selected_peaks + result_peaks
-                all_peaks.sort(key=lambda x: x['2θ'])
-
-                grouped_peaks = []
-                tolerance = 0.1
-                i = 0
-                while i < len(all_peaks):
-                    current_peak = all_peaks[i]
-                    group = [current_peak]
-                    j = i + 1
-                    while j < len(all_peaks) and abs(all_peaks[j]['2θ'] - current_peak['2θ']) < tolerance:
-                        group.append(all_peaks[j])
-                        j += 1
-
-                    grouped_peaks.append({
-                        '2θ': np.mean([p['2θ'] for p in group]),
-                        'labels': group
-                    })
-                    i = j
-
-                fig_diff = go.Figure()
-
-                max_intensity = 100
-
-                peak_trace_map = {}
-                peak_hover_map = {}
-
-                for peak in grouped_peaks:
-                    two_theta = peak['2θ']
-
-                    has_selected = any(p['type'] == search_label for p in peak['labels'])
-                    has_result = any(p['type'] == result_label for p in peak['labels'])
-
-                    if has_selected:
-                        if search_label not in peak_trace_map:
-                            peak_trace_map[search_label] = {'x': [], 'y': []}
-                            peak_hover_map[search_label] = []
-
-                        search_planes = [p['label'] for p in peak['labels'] if p['type'] == search_label]
-                        search_d_values = [p['d'] for p in peak['labels'] if p['type'] == search_label]
-                        hover_text = f"<b>2θ:</b> {two_theta:.2f}°<br><b>{search_label}:</b> {', '.join(search_planes)}<br><b>d:</b> {search_d_values[0]:.4f} Å"
-
-                        peak_trace_map[search_label]['x'].extend([two_theta, two_theta, None])
-                        peak_trace_map[search_label]['y'].extend([0, max_intensity, None])
-                        peak_hover_map[search_label].extend([hover_text, hover_text, None])
-
-                    if has_result:
-                        if result_label not in peak_trace_map:
-                            peak_trace_map[result_label] = {'x': [], 'y': []}
-                            peak_hover_map[result_label] = []
-
-                        result_planes = [p['label'] for p in peak['labels'] if p['type'] == result_label]
-                        result_d_values = [p['d'] for p in peak['labels'] if p['type'] == result_label]
-                        hover_text = f"<b>2θ:</b> {two_theta:.2f}°<br><b>{result_label}:</b> {', '.join(result_planes)}<br><b>d:</b> {result_d_values[0]:.4f} Å"
-
-                        peak_trace_map[result_label]['x'].extend([two_theta, two_theta, None])
-                        peak_trace_map[result_label]['y'].extend([0, max_intensity, None])
-                        peak_hover_map[result_label].extend([hover_text, hover_text, None])
-
-                if search_label in peak_trace_map:
-                    fig_diff.add_trace(go.Scatter(
-                        x=peak_trace_map[search_label]['x'],
-                        y=peak_trace_map[search_label]['y'],
-                        mode='lines',
-                        line=dict(color=search_color, width=3),
-                        name=search_label,
-                        hovertext=peak_hover_map[search_label],
-                        hoverinfo='text',
-                        hoverlabel=dict(
-                            bgcolor=search_color,
-                            font_size=22,
-                            font_family="Arial",
-                            font_color="white"
-                        )
-                    ))
-
-                if result_label in peak_trace_map:
-                    fig_diff.add_trace(go.Scatter(
-                        x=peak_trace_map[result_label]['x'],
-                        y=peak_trace_map[result_label]['y'],
-                        mode='lines',
-                        line=dict(color=result_color, width=3),
-                        name=result_label,
-                        hovertext=peak_hover_map[result_label],
-                        hoverinfo='text',
-                        hoverlabel=dict(
-                            bgcolor=result_color,
-                            font_size=22,
-                            font_family="Arial",
-                            font_color="white"
-                        )
-                    ))
-
-                max_annotations = 15
-                for peak in grouped_peaks[:max_annotations]:
-                    label_parts_search = []
-                    label_parts_result = []
-
-                    for p in peak['labels']:
-                        if p['type'] == search_label:
-                            label_parts_search.append(f"{search_label[0]}: {p['label']}")
-                        else:
-                            label_parts_result.append(f"{result_label[0]}: {p['label']}")
-
-                    if label_parts_search:
-                        label_text_search = '<br>'.join(label_parts_search[:2])
-                        if len(label_parts_search) > 2:
-                            label_text_search += f'<br>+{len(label_parts_search) - 2} more'
-
-                        if search_label == "Austenite":
-                            ay_pos = 80
-                            y_anchor = -10
-                        else:
-                            ay_pos = -80
-                            y_anchor = max_intensity + 10
-
-                        fig_diff.add_annotation(
-                            x=peak['2θ'],
-                            y=y_anchor,
-                            text=label_text_search,
-                            showarrow=True,
-                            arrowhead=2,
-                            arrowsize=1,
-                            arrowwidth=3,
-                            arrowcolor=search_color,
-                            ax=0,
-                            ay=ay_pos,
-                            font=dict(size=16, color=search_color, family='Arial Black'),
-                            bgcolor='rgba(255,255,255,0.8)',
-                            borderpad=4
-                        )
-
-                    if label_parts_result:
-                        label_text_result = '<br>'.join(label_parts_result[:2])
-                        if len(label_parts_result) > 2:
-                            label_text_result += f'<br>+{len(label_parts_result) - 2} more'
-
-                        if result_label == "Austenite":
-                            ay_pos = 80
-                            y_anchor = -10
-                        else:
-                            ay_pos = -80
-                            y_anchor = max_intensity + 10
-
-                        fig_diff.add_annotation(
-                            x=peak['2θ'],
-                            y=y_anchor,
-                            text=label_text_result,
-                            showarrow=True,
-                            arrowhead=2,
-                            arrowsize=1,
-                            arrowwidth=3,
-                            arrowcolor=result_color,
-                            ax=0,
-                            ay=ay_pos,
-                            font=dict(size=16, color=result_color, family='Arial Black'),
-                            bgcolor='rgba(255,255,255,0.8)',
-                            borderpad=4
-                        )
-
-                fig_diff.update_layout(
-                    xaxis_title="2θ (degrees)",
-                    yaxis_title="Intensity (a.u.)",
-                    height=600,
-                    hovermode='closest',
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1,
-                        font=dict(size=26, color='#000000')
-                    ),
-                    font=dict(size=26, color='#000000'),
-                    xaxis=dict(
-                        range=[1, 160],
-                        tickfont=dict(size=24, color='#000000'),
-                        title_font=dict(size=28, color='#000000'),
-                        gridcolor='#d0d0d0',
-                        linecolor='#000000',
-                        linewidth=2
-                    ),
-                    yaxis=dict(
-                        range=[-20, max_intensity + 25],
-                        tickfont=dict(size=24, color='#000000'),
-                        title_font=dict(size=28, color='#000000'),
-                        gridcolor='#d0d0d0',
-                        linecolor='#000000',
-                        linewidth=2
-                    ),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    hoverlabel=dict(
-                        bgcolor="white",
-                        font_size=22,
-                        font_family="Arial"
-                    )
-                )
-
-                st.plotly_chart(fig_diff, use_container_width=True)
-
-                st.markdown("### 📋 Calculated Diffraction Angles")
-                st.markdown(
-                    f"*2θ calculated using Bragg's law (λ = 2d·sin(θ)) with wavelength {wavelength} Å. Valid range: 1° to 160°*")
-
-                peak_table_data = []
-                for peak in all_peaks:
-                    peak_table_data.append({
-                        'Phase': peak['type'],
-                        'Reflection (h,k,l)': peak['label'],
-                        '2θ (°)': f"{peak['2θ']:.3f}",
-                        'd-spacing (Å)': f"{peak['d']:.4f}"
-                    })
-
-                peak_df = pd.DataFrame(peak_table_data)
-
-                html_peak_table = "<table style='width:100%; border-collapse: collapse; font-size:16px;'>"
-                html_peak_table += "<thead><tr style='background-color:#34495e; color:white;'>"
-                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>Phase</th>"
-                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>Reflection (h,k,l)</th>"
-                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>2θ (°)</th>"
-                html_peak_table += "<th style='padding:12px; text-align:center; font-size:18px; font-weight:bold; border:1px solid #ddd;'>d-spacing (Å)</th>"
-                html_peak_table += "</tr></thead><tbody>"
-
-                for _, row in peak_df.iterrows():
-                    phase_color = search_color if row['Phase'] == search_label else result_color
-                    html_peak_table += "<tr style='border-bottom:1px solid #ddd;'>"
-                    html_peak_table += f"<td style='padding:10px; text-align:center; color:{phase_color}; font-weight:bold; border:1px solid #ddd;'>{row['Phase']}</td>"
-                    html_peak_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row['Reflection (h,k,l)']}</td>"
-                    html_peak_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row['2θ (°)']}</td>"
-                    html_peak_table += f"<td style='padding:10px; text-align:center; border:1px solid #ddd;'>{row['d-spacing (Å)']}</td>"
-                    html_peak_table += "</tr>"
-
-                html_peak_table += "</tbody></table>"
-
-                st.markdown(html_peak_table, unsafe_allow_html=True)
-
-                st.markdown("---")
-
-            st.subheader("📊 d-spacing Comparison")
-
-            max_bars = min(15, len(filtered_df))
-            display_bars_df = filtered_df.head(max_bars)
-
-            if not combine_graphs:
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.markdown(f"**{search_label} Reflection**")
-
-                    fig_search = go.Figure()
-                    fig_search.add_trace(go.Bar(
-                        x=[selected_reflection],
-                        y=[selected_d],
-                        name=search_label,
-                        marker_color=search_color,
-                        text=[f"{selected_d:.3f} Å"],
-                        textposition='outside',
-                        textfont=dict(size=22, family='Arial Black', color='#000000'),
-                        hovertemplate='<b>%{x}</b><br>d = %{y:.3f} Å<extra></extra>'
-                    ))
-
-                    y_max = selected_d * 1.2
-
-                    fig_search.update_layout(
-                        xaxis_title="Reflection",
-                        yaxis_title="d-spacing (Å)",
-                        height=550,
-                        showlegend=False,
-                        font=dict(size=26, color='#000000'),
-                        xaxis=dict(
-                            tickfont=dict(size=24, color='#000000'),
-                            title_font=dict(size=28, color='#000000'),
-                            linecolor='#000000',
-                            linewidth=2
-                        ),
-                        yaxis=dict(
-                            range=[0, y_max],
-                            tickfont=dict(size=24, color='#000000'),
-                            title_font=dict(size=28, color='#000000'),
-                            gridcolor='#d0d0d0',
-                            linecolor='#000000',
-                            linewidth=2
-                        ),
-                        plot_bgcolor='white',
-                        paper_bgcolor='white',
-                        hoverlabel=dict(
-                            bgcolor="white",
-                            font_size=22,
-                            font_family="Arial"
-                        )
-                    )
-
-                    st.plotly_chart(fig_search, use_container_width=True)
-
-                with col2:
-                    st.markdown(f"**Corresponding {result_label} Reflections (showing first {max_bars})**")
-
-                    fig_result = go.Figure()
-                    fig_result.add_trace(go.Bar(
-                        x=display_bars_df[result_column].tolist(),
-                        y=display_bars_df[result_d].tolist(),
-                        name=result_label,
-                        marker_color=result_color,
-                        text=[f"{d:.3f} Å" for d in display_bars_df[result_d]],
-                        textposition='outside',
-                        textfont=dict(size=22, family='Arial Black', color='#000000'),
-                        hovertemplate='<b>%{x}</b><br>d = %{y:.3f} Å<extra></extra>'
-                    ))
-
-                    y_max_result = display_bars_df[result_d].max() * 1.2
-
-                    fig_result.update_layout(
-                        xaxis_title="Reflection",
-                        yaxis_title="d-spacing (Å)",
-                        height=550,
-                        showlegend=False,
-                        xaxis_tickangle=-45,
-                        font=dict(size=26, color='#000000'),
-                        xaxis=dict(
-                            tickfont=dict(size=24, color='#000000'),
-                            title_font=dict(size=28, color='#000000'),
-                            linecolor='#000000',
-                            linewidth=2
-                        ),
-                        yaxis=dict(
-                            range=[0, y_max_result],
-                            tickfont=dict(size=24, color='#000000'),
-                            title_font=dict(size=28, color='#000000'),
-                            gridcolor='#d0d0d0',
-                            linecolor='#000000',
-                            linewidth=2
-                        ),
-                        margin=dict(b=120),
-                        plot_bgcolor='white',
-                        paper_bgcolor='white',
-                        hoverlabel=dict(
-                            bgcolor="white",
-                            font_size=22,
-                            font_family="Arial"
-                        )
-                    )
-
-                    st.plotly_chart(fig_result, use_container_width=True)
-
-            else:
-                st.markdown(
-                    f"**Combined View: {search_label} & {result_label} (showing first {max_bars} {result_label.lower()} reflections)**")
-
-                fig_combined = go.Figure()
-
-                fig_combined.add_trace(go.Bar(
-                    x=[selected_reflection],
-                    y=[selected_d],
-                    name=search_label,
-                    marker_color=search_color,
-                    text=[f"{selected_d:.3f} Å"],
-                    textposition='outside',
-                    textfont=dict(size=22, family='Arial Black', color='#000000'),
-                    hovertemplate='<b>%{x}</b><br>d = %{y:.3f} Å<extra></extra>'
-                ))
-
-                fig_combined.add_trace(go.Bar(
-                    x=display_bars_df[result_column].tolist(),
-                    y=display_bars_df[result_d].tolist(),
-                    name=result_label,
-                    marker_color=result_color,
-                    text=[f"{d:.3f} Å" for d in display_bars_df[result_d]],
-                    textposition='outside',
-                    textfont=dict(size=22, family='Arial Black', color='#000000'),
-                    hovertemplate='<b>%{x}</b><br>d = %{y:.3f} Å<extra></extra>'
-                ))
-
-                y_max_combined = max(selected_d, display_bars_df[result_d].max()) * 1.2
-
-                fig_combined.update_layout(
-                    xaxis_title="Reflection",
-                    yaxis_title="d-spacing (Å)",
-                    height=650,
-                    barmode='group',
-                    xaxis_tickangle=-45,
-                    font=dict(size=26, color='#000000'),
-                    xaxis=dict(
-                        tickfont=dict(size=24, color='#000000'),
-                        title_font=dict(size=28, color='#000000'),
-                        linecolor='#000000',
-                        linewidth=2
-                    ),
-                    yaxis=dict(
-                        range=[0, y_max_combined],
-                        tickfont=dict(size=24, color='#000000'),
-                        title_font=dict(size=28, color='#000000'),
-                        gridcolor='#d0d0d0',
-                        linecolor='#000000',
-                        linewidth=2
-                    ),
-                    margin=dict(b=140),
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1,
-                        font=dict(size=26, color='#000000')
-                    ),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    hoverlabel=dict(
-                        bgcolor="white",
-                        font_size=22,
-                        font_family="Arial"
-                    )
-                )
-
-                st.plotly_chart(fig_combined, use_container_width=True)
-
+    st.subheader("Diffraction & display")
+    wl_label = st.selectbox("X-ray wavelength", list(WAVELENGTHS), index=0)
+    wavelength = WAVELENGTHS[wl_label]
+    if wavelength is None:
+        wavelength = st.number_input("Wavelength λ (Å)", min_value=0.1, max_value=5.0, value=1.5406,
+                                     step=0.0001, format="%.4f")
+    max_display = st.number_input("Max. rows to display", min_value=5, max_value=500, value=50, step=5)
+
+    st.subheader("Lattice parameters")
+    st.selectbox(
+        "Preset",
+        list(PRESETS) + [CUSTOM],
+        key="preset",
+        on_change=_apply_preset,
+        help="Pick a predefined alloy or edit the values below to define your own lattice.",
+    )
+    if st.session_state["preset"] in PRESETS:
+        st.caption(PRESETS[st.session_state["preset"]]["source"])
     else:
-        st.info(
-            f"👆 Please select a {search_label.lower()} reflection from the dropdown above to view corresponding {result_label.lower()} data and visualizations.")
+        st.caption("Custom lattice — edit any value below.")
 
-        st.markdown("---")
-        st.subheader("📐 Crystal Structure Information")
+    st.markdown(f"**<span style='color:{A_COLOR}'>Austenite B2</span>** · Pm-3m (221)", unsafe_allow_html=True)
+    st.number_input("a₀ (Å)", key="lat_a0", min_value=1.0, max_value=10.0, step=0.001, format="%.4f",
+                    on_change=_mark_custom)
 
-        col1, col2 = st.columns(2)
+    st.markdown(f"**<span style='color:{M_COLOR}'>Martensite B19'</span>** · P2₁/m (11), unique axis b",
+                unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    c1.number_input("a (Å)", key="lat_a", min_value=1.0, max_value=10.0, step=0.001, format="%.4f",
+                    on_change=_mark_custom)
+    c2.number_input("b (Å)", key="lat_b", min_value=1.0, max_value=10.0, step=0.001, format="%.4f",
+                    on_change=_mark_custom)
+    c1.number_input("c (Å)", key="lat_c", min_value=1.0, max_value=10.0, step=0.001, format="%.4f",
+                    on_change=_mark_custom)
+    c2.number_input("β (°)", key="lat_beta", min_value=60.0, max_value=150.0, step=0.01, format="%.2f",
+                    on_change=_mark_custom, help="Set β = 90° for orthorhombic B19 martensite.")
 
-        with col1:
-            st.markdown("### Austenite (B2)")
-            st.markdown(f"**Space Group:** {AUSTENITE['space_group']}")
-            st.markdown(f"**Crystal System:** {AUSTENITE['structure']}")
-            st.markdown("**Lattice Parameters:**")
-            st.markdown(f"- a = b = c = {AUSTENITE['a']:.3f} Å")
-            st.markdown(f"- α = β = γ = {AUSTENITE['alpha']}°")
+    st.subheader("Options")
+    max_index = st.slider("Max. martensite Miller index |h|, |k|, |l|", 2, 6, 4,
+                          help="Range of martensite planes included in the correspondence search.")
+    only_diffracting = st.toggle(
+        "Only reflections that can diffract", value=False,
+        help="Hide austenite planes with half-integer indices (they do not diffract in B2) and "
+             "martensite 0k0 reflections with odd k (extinct in P2₁/m).",
+    )
 
-        with col2:
-            st.markdown("### Martensite (B19')")
-            st.markdown(f"**Space Group:** {MARTENSITE['space_group']}")
-            st.markdown(f"**Crystal System:** {MARTENSITE['structure']}")
-            st.markdown("**Lattice Parameters:**")
-            st.markdown(f"- a = {MARTENSITE['a']:.3f} Å")
-            st.markdown(f"- b = {MARTENSITE['b']:.3f} Å")
-            st.markdown(f"- c = {MARTENSITE['c']:.3f} Å")
-            st.markdown(f"- α = {MARTENSITE['alpha']}°, β = {MARTENSITE['beta']:.2f}°, γ = {MARTENSITE['gamma']}°")
+lat = {k: float(st.session_state[f"lat_{k}"]) for k in LATTICE_KEYS}
+df = get_correspondence(lat["a0"], lat["a"], lat["b"], lat["c"], lat["beta"], max_index)
+
+# ----------------------------------------------------------------------------------------------
+# Header
+# ----------------------------------------------------------------------------------------------
+
+st.title("Austenite ↔ Martensite Correspondence")
+
+v_a = lat["a0"] ** 3  # B2 cell = 1 formula unit
+v_m = lat["a"] * lat["b"] * lat["c"] * np.sin(np.radians(lat["beta"])) / 2  # B19' cell = 2 formula units
+DIRECTIONS = ["🔵 Austenite → 🔴 Martensite", "🔴 Martensite → 🔵 Austenite"]
+c_dir, m1, m2, m3, m4 = st.columns([1.5, 1, 1, 1, 1], vertical_alignment="center")
+with c_dir:
+    direction = st.segmented_control("🔁 Search direction", DIRECTIONS, default=DIRECTIONS[0], key="direction",
+                                     help="Choose which phase you pick a reflection from.")
+    direction = direction or DIRECTIONS[0]
+m1.metric("B2 volume / f.u.", f"{v_a:.3f} Å³")
+m2.metric("B19' volume / f.u.", f"{v_m:.3f} Å³")
+m3.metric("Volume change ΔV/V", f"{(v_m - v_a) / v_a * 100:+.2f} %")
+m4.metric("Monoclinic shear (β − 90°)", f"{lat['beta'] - 90:.2f}°")
+
+# ----------------------------------------------------------------------------------------------
+# Search controls
+# ----------------------------------------------------------------------------------------------
+
+c_refl, c_ang = st.columns([2.5, 1.5])
+
+if direction == DIRECTIONS[1]:
+    search, result = "martensite", "austenite"
+    s_label, r_label, s_d, r_d = "Martensite", "Austenite", "dM", "dA"
+    s_color, r_color = M_COLOR, A_COLOR
+    s_allowed, r_allowed = "allowed_M", "allowed_A"
+    default_refl = "(-1 1 1)"
 else:
-    st.warning("⚠️ Please ensure 'hkl_corresp_table_NiTiHf_extended.xlsx' is in the same directory as this script.")
+    search, result = "austenite", "martensite"
+    s_label, r_label, s_d, r_d = "Austenite", "Martensite", "dA", "dM"
+    s_color, r_color = A_COLOR, M_COLOR
+    s_allowed, r_allowed = "allowed_A", "allowed_M"
+    default_refl = "(1 1 0)"
+
+pool = df[df[s_allowed] & df[r_allowed]] if only_diffracting else df
+choices = (pool.groupby(search)[s_d].first().sort_values(ascending=False))
+d_lookup = choices.to_dict()
+
+with c_refl:
+    options = list(choices.index)
+    sel_key = f"refl_{search}"
+    if st.session_state.get(sel_key) not in options:
+        st.session_state[sel_key] = default_refl if default_refl in options else options[0]
+
+    def _fmt(lbl):
+        tt = float(d_to_twotheta(d_lookup[lbl], wavelength))
+        tt_txt = f"2θ = {tt:.2f}°" if np.isfinite(tt) else "2θ: out of range"
+        return f"{lbl}   ·   d = {d_lookup[lbl]:.4f} Å   ·   {tt_txt}"
+
+    selected = st.selectbox(
+        f"{s_label} reflection (h k l) — sorted by d-spacing", options, key=sel_key, format_func=_fmt,
+        help="Type to search, e.g. '1 1 0'.",
+    )
+
+with c_ang:
+    min_angle, max_angle = st.slider(
+        "Angle between plane normals (°)", 0.0, 30.0, (0.0, 15.0), step=0.5,
+        help="Keep only correspondences whose plane normals are within this angular range.",
+    )
+
+sel = pool[(pool[search] == selected) & pool["angle"].between(min_angle, max_angle)].copy()
+sel_d = d_lookup[selected]
+sel_tt = float(d_to_twotheta(sel_d, wavelength))
+sel["2θ_r"] = d_to_twotheta(sel[r_d].to_numpy(), wavelength)
+sel["d2θ"] = sel["2θ_r"] - sel_tt
+sel = sel.sort_values(["angle", r_d], ascending=[True, False])
+
+if sel.empty:
+    st.warning(
+        f"No corresponding {r_label.lower()} planes for {selected} with the angle between normals in "
+        f"{min_angle}°–{max_angle}°. Widen the angle range or switch off 'Only reflections that can diffract'."
+    )
+    st.stop()
+
+# Summary for the selected reflection
+k1, k2, k3, k4 = st.columns(4)
+k1.metric(f"{s_label} {selected}", f"d = {sel_d:.4f} Å")
+k2.metric("Peak position", f"2θ = {sel_tt:.3f}°" if np.isfinite(sel_tt) else "out of range")
+k3.metric(f"Corresponding {r_label.lower()} planes", f"{len(sel)}",
+          help=f"{sel[result].nunique()} distinct planes, {sel[r_d].round(5).nunique()} distinct d-spacings")
+closest = sel.loc[sel["d2θ"].abs().idxmin()] if sel["d2θ"].notna().any() else None
+k4.metric("Smallest peak shift Δ2θ", f"{closest['d2θ']:+.3f}°" if closest is not None else "—",
+          help=f"Between {selected} and {closest[result]}" if closest is not None else None)
+
+tab_table, tab_xrd, tab_d = st.tabs(
+    ["📋 Correspondence table", "📈 Diffraction peaks", "📊 d-spacing comparison"],
+    key="main_tab",
+)
+
+# ----------------------------------------------------------------------------------------------
+# Tab 1: correspondence table
+# ----------------------------------------------------------------------------------------------
+
+with tab_table:
+    shown = sel.head(int(max_display))
+    st.caption(f"Showing {len(shown)} of {len(sel)} correspondences · click a column header to sort.")
+
+    table = pd.DataFrame({
+        f"{s_label} (hkl)": shown[search],
+        f"{r_label} (hkl)": shown[result],
+        "Variant": shown["variant"],
+        "Mult. M": shown["mult_M"],
+        "Mult. A": shown["mult_A"],
+        "d M (Å)": shown["dM"],
+        "d A (Å)": shown["dA"],
+        f"2θ {r_label[0]} (°)": shown["2θ_r"],
+        "Δ2θ (°)": shown["d2θ"],
+        "Angle (°)": shown["angle"],
+        "Normal strain (%)": shown["strain"],
+        "Shear strain (%)": shown["strain_shear"],
+        "Diffracts": shown[r_allowed],
+    })
+
+    smax = max(df["strain"].abs().max(), 1e-9)
+
+    def _strain_bg(v):
+        alpha = min(abs(v) / smax, 1.0) * 0.6
+        rgb = "39,174,96" if v >= 0 else "231,76,60"
+        return f"background-color: rgba({rgb},{alpha:.2f})"
+
+    def _angle_color(v):
+        return f"color: {'#27ae60' if v < 5 else '#f39c12' if v < 10 else '#e74c3c'}; font-weight: 600"
+
+    styled = (
+        table.style
+        .map(_strain_bg, subset=["Normal strain (%)"])
+        .map(_angle_color, subset=["Angle (°)"])
+        .map(lambda _: f"color: {A_COLOR}; font-weight: 600", subset=["Austenite (hkl)"])
+        .map(lambda _: f"color: {M_COLOR}; font-weight: 600", subset=["Martensite (hkl)"])
+        .format({"d M (Å)": "{:.4f}", "d A (Å)": "{:.4f}", f"2θ {r_label[0]} (°)": "{:.3f}",
+                 "Δ2θ (°)": "{:+.3f}", "Angle (°)": "{:.2f}", "Normal strain (%)": "{:+.2f}",
+                 "Shear strain (%)": "{:.2f}"}, na_rep="—")
+    )
+    st.dataframe(
+        styled, hide_index=True,
+        column_config={
+            "Variant": st.column_config.NumberColumn(help="Lattice correspondence variant (1–12)"),
+            "Δ2θ (°)": st.column_config.NumberColumn(help=f"2θ({r_label}) − 2θ({s_label} {selected})"),
+            "Angle (°)": st.column_config.NumberColumn(
+                help="Angle between the martensite and austenite plane normals"),
+            "Normal strain (%)": st.column_config.NumberColumn(help="(d_M − d_A) / d_A × 100"),
+            "Shear strain (%)": st.column_config.NumberColumn(help="Angle between normals in radians × 100"),
+            "Diffracts": st.column_config.CheckboxColumn(
+                help=f"Whether this {r_label.lower()} plane gives a diffraction peak"),
+        },
+    )
+    st.download_button(
+        "⬇️ Download all correspondences (CSV)",
+        sel.drop(columns=["hkl_M", "hkl_A"]).to_csv(index=False).encode(),
+        file_name=f"correspondence_{search}_{selected.strip('()').replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
+
+# ----------------------------------------------------------------------------------------------
+# Tab 2: diffraction peaks
+# ----------------------------------------------------------------------------------------------
+
+with tab_xrd:
+    peaks = [{"phase": s_label, "hkl": selected, "d": sel_d, "2θ": sel_tt}]
+    for d_val, grp in sel.groupby(sel[r_d].round(6)):
+        peaks.append({"phase": r_label, "hkl": ", ".join(sorted(grp[result].unique())), "d": d_val,
+                      "2θ": float(d_to_twotheta(d_val, wavelength)),
+                      "allowed": bool(grp[r_allowed].any())})
+    peaks = [p for p in peaks if np.isfinite(p["2θ"])]
+    if len(peaks) < 2:
+        st.info("The corresponding peaks are outside the measurable 2θ range for this wavelength.")
+
+    plot_slot = st.container()  # the plot is drawn here, above its settings
+
+    settings = st.container(border=True)
+    settings.markdown("**⚙️ Peak profile settings**")
+    o1, o2, o3, o4 = settings.columns(4)
+    profile = o1.selectbox("Peak shape", PROFILES, index=PROFILES.index("Pseudo-Voigt"),
+                           help="Draw each peak as a modelled profile instead of a vertical line.")
+    width_mode = o2.radio("Peak width", ["Constant FWHM", "Caglioti (U, V, W)"], index=1, horizontal=True,
+                          help="Caglioti U, V, W describe the instrumental broadening of a diffractometer "
+                               "(optics, slits, wavelength spread), not of a material. They are normally refined "
+                               "from a line-profile standard such as NIST LaB₆ (SRM 660) or Si (SRM 640) measured "
+                               "on the same instrument. Sample effects (crystallite size, microstrain, defects) "
+                               "add extra broadening on top — martensite peaks are typically broader.",
+                          disabled=profile == PROFILES[0])
+    show_sticks = o3.toggle("Show stick positions", value=True)
+    zoom = o4.toggle("Zoom to peaks", value=True)
+
+    p1, p2, p3, p4 = settings.columns(4)
+    if width_mode == "Constant FWHM":
+        fwhm_const = p1.number_input("FWHM (° 2θ)", 0.005, 5.0, 0.15, 0.01, format="%.3f",
+                                     disabled=profile == PROFILES[0])
+        fwhm_of = lambda tt: np.full_like(np.asarray(tt, float), fwhm_const)
+    else:
+        u = p1.number_input("U", -1.0, 1.0, 0.01, 0.001, format="%.4f")
+        v = p2.number_input("V", -1.0, 1.0, -0.005, 0.001, format="%.4f")
+        w = p3.number_input("W", 0.0, 1.0, 0.005, 0.001, format="%.4f")
+        fwhm_of = lambda tt: caglioti_fwhm(tt, u, v, w)
+    shape_param = None
+    if profile == "Pseudo-Voigt":
+        shape_param = p4.slider("η (Lorentzian fraction)", 0.0, 1.0, 0.5, 0.05)
+    elif profile == "Pearson VII":
+        shape_param = p4.slider("m (shape exponent)", 1.0, 10.0, 1.5, 0.1,
+                                help="m = 1 → Lorentzian, m → ∞ → Gaussian")
+
+    tts = np.array([p["2θ"] for p in peaks])
+    if zoom and len(tts):
+        margin = max(2.0, 0.15 * (tts.max() - tts.min()))
+        x_range = [max(0.0, tts.min() - margin), min(180.0, tts.max() + margin)]
+    else:
+        x_range = [5.0, 160.0]
+
+    fig = go.Figure()
+    if profile != PROFILES[0]:
+        x = np.linspace(x_range[0], x_range[1], 4000)
+        for phase, color in [(s_label, s_color), (r_label, r_color)]:
+            y = np.zeros_like(x)
+            for p in (p for p in peaks if p["phase"] == phase):
+                fw = float(fwhm_of(p["2θ"]))
+                if profile == "Gaussian":
+                    y += gaussian(x, p["2θ"], fw)
+                elif profile == "Lorentzian":
+                    y += lorentzian(x, p["2θ"], fw)
+                elif profile == "Pseudo-Voigt":
+                    y += pseudo_voigt(x, p["2θ"], fw, shape_param)
+                else:
+                    y += pearson_vii(x, p["2θ"], fw, shape_param)
+            fig.add_trace(go.Scatter(x=x, y=100 * y, mode="lines", name=f"{phase} ({profile})",
+                                     line=dict(color=color, width=2.5), fill="tozeroy",
+                                     opacity=0.6, hoverinfo="skip"))
+
+    if show_sticks or profile == PROFILES[0]:
+        for phase, color in [(s_label, s_color), (r_label, r_color)]:
+            xs, ys, hov = [], [], []
+            for p in (p for p in peaks if p["phase"] == phase):
+                ht = (f"<b>{phase}</b> {p['hkl']}<br>2θ = {p['2θ']:.3f}°<br>d = {p['d']:.4f} Å"
+                      f"<br>Δ2θ = {p['2θ'] - sel_tt:+.3f}°")
+                xs += [p["2θ"], p["2θ"], None]
+                ys += [0, 100, None]
+                hov += [ht, ht, None]
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=f"{phase} positions",
+                                     line=dict(color=color, width=2 if profile != PROFILES[0] else 3,
+                                               dash="dot" if profile != PROFILES[0] else "solid"),
+                                     hovertext=hov, hoverinfo="text"))
+
+    for i, p in enumerate(peaks[:20]):
+        is_sel = p["phase"] == s_label
+        lbl = p["hkl"] if len(p["hkl"]) < 30 else p["hkl"][:27] + "…"
+        fig.add_annotation(x=p["2θ"], y=100, text=f"{p['phase'][0]}: {lbl}", showarrow=True, arrowhead=2,
+                           ax=0, ay=-40 - 34 * (i % 3), font=dict(color=s_color if is_sel else r_color, size=22),
+                           bgcolor="rgba(255,255,255,0.85)", arrowcolor=s_color if is_sel else r_color)
+
+    fig.update_layout(
+        height=800, margin=dict(t=150, b=170, l=110, r=30),
+        xaxis=dict(title="2θ (°)", range=x_range, **AXIS_STYLE),
+        yaxis=dict(title="Normalised intensity", range=[0, 130] if profile == PROFILES[0] else None,
+                   **AXIS_STYLE),
+        legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5, font=LEGEND_FONT),
+        hovermode="closest", hoverlabel=HOVER_STYLE,
+        font=PLOT_FONT,
+    )
+    plot_slot.plotly_chart(fig, config={"toImageButtonOptions": {"format": "png", "scale": 3}})
+    plot_slot.caption(
+        f"λ = {wavelength:.4f} Å, Bragg's law λ = 2d sin θ. All peaks have the same height — intensities "
+        "(structure factors, texture, phase fractions) are not modelled; the figure shows positions and "
+        "peak overlap only."
+    )
+
+    peak_df = pd.DataFrame([{
+        "Phase": p["phase"], "Reflection(s)": p["hkl"], "d (Å)": p["d"], "2θ (°)": p["2θ"],
+        "Δ2θ vs selected (°)": p["2θ"] - sel_tt, "FWHM (°)": float(fwhm_of(p["2θ"])) if profile != PROFILES[0] else None,
+    } for p in sorted(peaks, key=lambda p: p["2θ"])])
+    st.dataframe(peak_df.style.format({"d (Å)": "{:.4f}", "2θ (°)": "{:.3f}", "Δ2θ vs selected (°)": "{:+.3f}",
+                                       "FWHM (°)": "{:.3f}"}, na_rep="—")
+                 .map(lambda ph: f"color: {A_COLOR if ph == 'Austenite' else M_COLOR}; font-weight: 600",
+                      subset=["Phase"]),
+                 hide_index=True)
+
+# ----------------------------------------------------------------------------------------------
+# Tab 3: d-spacing comparison
+# ----------------------------------------------------------------------------------------------
+
+with tab_d:
+    bars = sel.drop_duplicates(result).head(30)
+    fig_d = go.Figure()
+    fig_d.add_trace(go.Bar(x=[selected], y=[sel_d], name=s_label, marker_color=s_color,
+                           text=[f"{sel_d:.3f}"], textposition="outside", textfont=dict(size=22)))
+    fig_d.add_trace(go.Bar(x=bars[result], y=bars[r_d], name=r_label, marker_color=r_color,
+                           text=[f"{d:.3f}" for d in bars[r_d]], textposition="outside", textfont=dict(size=22),
+                           customdata=np.stack([bars["angle"], bars["strain"]], axis=1),
+                           hovertemplate="%{x}<br>d = %{y:.4f} Å<br>angle = %{customdata[0]:.2f}°"
+                                         "<br>strain = %{customdata[1]:+.2f} %<extra></extra>"))
+    fig_d.add_hline(y=sel_d, line_dash="dash", line_color=s_color, opacity=0.6)
+    fig_d.update_layout(
+        height=760, margin=dict(t=60, b=240, l=110, r=30),
+        yaxis=dict(title="d-spacing (Å)", range=[0, max(sel_d, bars[r_d].max()) * 1.25], **AXIS_STYLE),
+        xaxis=dict(title="Reflection", tickangle=-45, **AXIS_STYLE), font=PLOT_FONT,
+        legend=dict(orientation="h", yanchor="top", y=-0.36, xanchor="center", x=0.5, font=LEGEND_FONT),
+        hoverlabel=HOVER_STYLE,
+    )
+    st.plotly_chart(fig_d)
+    st.caption(f"Showing up to 30 distinct {r_label.lower()} planes. Dashed line = d of the selected "
+               f"{s_label.lower()} reflection.")
